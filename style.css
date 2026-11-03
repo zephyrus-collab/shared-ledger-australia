@@ -200,6 +200,15 @@ body.gated #nav { display: none; }
 .row-date { color: var(--text-muted); font-size: 0.875rem; font-variant-numeric: tabular-nums; padding-top: 2px; }
 .row-title { font-weight: 600; overflow-wrap: anywhere; }
 .row-meta { color: var(--text-muted); font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.row-note {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.row > div { min-width: 0; }
 .row-effect {
   margin-top: 2px;
   color: var(--brown);
@@ -271,6 +280,7 @@ fieldset.choice legend { padding: 0; margin-bottom: 4px; font-size: 0.9375rem; f
 .segments input:disabled + span { opacity: 0.5; }
 .segments input:disabled { cursor: not-allowed; }
 .lines-section { margin-top: 16px; }
+.lines-section + .field { margin-top: 16px; }
 .line {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 7rem 44px;

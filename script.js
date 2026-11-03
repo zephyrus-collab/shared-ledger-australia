@@ -369,6 +369,9 @@ export function diffEntry(before, after, people) {
     const to = personal(after, personUid);
     if (from !== to) changes.push({ field: "personal", personUid, from, to });
   }
+  if ((before.note || "") !== (after.note || "")) {
+    changes.push({ field: "note", from: before.note || "", to: after.note || "" });
+  }
   if (linesText(before) !== linesText(after)) {
     changes.push({ field: "lines", from: before.lines || [], to: after.lines || [] });
   }
@@ -383,7 +386,7 @@ function linesText(e) {
 }
 
 function sameContent(a, b) {
-  return linesText(a) === linesText(b) && ["paidBy", "totalCents", "payerPersonalCents", "otherPersonalCents", "item", "date"].every((k) => a[k] === b[k]);
+  return linesText(a) === linesText(b) && (a.note || "") === (b.note || "") && ["paidBy", "totalCents", "payerPersonalCents", "otherPersonalCents", "item", "date"].every((k) => a[k] === b[k]);
 }
 
 const entryRef = (id) => fb.doc(db, "entries", id);
@@ -490,6 +493,7 @@ function entryRow(e) {
     h("div", {},
       h("div", { class: "row-title" }, title, edited ? h("span", { class: "tag" }, "已修改") : null),
       e.kind === "expense" ? h("div", { class: "row-meta" }, `${nameOf(e.paidBy)}付 ${formatMoney(e.totalCents)}`) : null,
+      e.note ? h("div", { class: "row-note" }, e.note) : null,
       h("div", { class: `row-effect${effect.quiet ? " quiet" : ""}` }, effect.text),
     ),
   ));
@@ -585,6 +589,7 @@ function renderExpenseForm(entry) {
 
   const total = moneyInput("f-total", entry ? centsPlain(entry.totalCents) : "");
   const item = h("input", { id: "f-item", type: "text", lang: "zh-Hant", maxLength: 100, autocomplete: "off", list: "item-suggestions", placeholder: "例如：超市採買", value: entry?.item ?? "" });
+  const noteInput = h("input", { id: "f-note", type: "text", lang: "zh-Hant", maxLength: 200, autocomplete: "off", placeholder: "例如：買給室友的", value: entry?.note ?? "" });
   const date = h("input", { id: "f-date", type: "date", max: localDate(), value: entry?.date ?? localDate() });
   const suggestions = h("datalist", { id: "item-suggestions" },
     [...new Set(activeEntries().filter((e) => e.kind === "expense").map((e) => e.item))].slice(0, 50).map((v) => h("option", { value: v })));
@@ -707,6 +712,7 @@ function renderExpenseForm(entry) {
       item: itemText,
       date: date.value,
       lines,
+      note: noteInput.value.trim(),
     };
     if (entry && (!S.formDirty || sameContent(entry, content))) {
       S.formDirty = false;
@@ -762,6 +768,7 @@ function renderExpenseForm(entry) {
     field("總金額", total),
     field("項目", item),
     field("日期", date),
+    field("整張單的備註（選填）", noteInput),
     h("fieldset", { class: "choice" }, h("legend", {}, "這筆是？"),
       segments("mode", [
         { value: "shared", label: "全部共同" },
@@ -808,6 +815,7 @@ function changeText(c, kind) {
     const label = c.field === "totalCents" && kind === "repayment" ? "金額" : FIELD_LABEL[c.field];
     return `${label} ${formatMoney(c.from)} → ${formatMoney(c.to)}`;
   }
+  if (c.field === "note") return `備註 ${c.from || "（空白）"} → ${c.to || "（空白）"}`;
   if (c.field === "lines") return `細項 ${linesSummary(c.from)} → ${linesSummary(c.to)}`;
   if (c.field === "item") return `${kind === "repayment" ? "備註" : "項目"} ${c.from || "（空白）"} → ${c.to || "（空白）"}`;
   if (c.field === "date") return `日期 ${slashDate(c.from)} → ${slashDate(c.to)}`;
@@ -870,6 +878,7 @@ function renderEntry() {
       const rest = e.totalCents - e.lines.reduce((a, l) => a + l.cents, 0);
       if (rest > 0) rows.push(["其他", formatMoney(rest)]);
     }
+    if (e.note) rows.push(["備註", e.note]);
     rows.push(["共同用品", formatMoney(sharedCents(e))], ["結果", entryEffect(e).text], ["你的花費", formatMoney(myCost(e, me()))]);
   }
   if (e.deletedAt) rows.push(["狀態", `${nameOf(e.deletedBy)}於 ${timeText(e.deletedAt)} 刪除`]);
@@ -1140,7 +1149,7 @@ function renderSpend() {
 // ---------- 設定 ----------
 
 function exportCsv() {
-  const header = ["日期", "類型", "項目", "付款人", "細項", "總金額", "付款人個人", "對方個人", "共同金額", "對方應付", "狀態", "建立者", "建立時間", "最後修改者", "最後修改時間"];
+  const header = ["日期", "類型", "項目", "付款人", "細項", "總金額", "付款人個人", "對方個人", "共同金額", "對方應付", "備註", "狀態", "建立者", "建立時間", "最後修改者", "最後修改時間"];
   const nick = (uid) => (uid ? memberName(uid) : "");
   const iso = (ts) => (ts?.toDate ? `${localDate(ts.toDate())} ${ts.toDate().toTimeString().slice(0, 8)}` : "");
   const lines = [...S.entries].sort((a, b) => a.date.localeCompare(b.date) || ms(a.createdAt) - ms(b.createdAt)).map((e) => {
@@ -1148,7 +1157,7 @@ function exportCsv() {
     return [
       e.date, expense ? "消費" : "還款", e.item, nick(e.paidBy), (e.lines || []).map((l) => `${l.name} ${centsPlain(l.cents)}（${l.owner === "shared" ? "共同" : nick(l.owner) || "對方"}）`).join("；"), centsPlain(e.totalCents),
       expense ? centsPlain(e.payerPersonalCents) : "", expense ? centsPlain(e.otherPersonalCents) : "",
-      expense ? centsPlain(sharedCents(e)) : "", expense ? centsPlain(owedCents(e)) : "",
+      expense ? centsPlain(sharedCents(e)) : "", expense ? centsPlain(owedCents(e)) : "", e.note || "",
       e.deletedAt ? "已刪除" : "有效", nick(e.createdBy), iso(e.createdAt), nick(e.updatedBy), iso(e.updatedAt),
     ].map(csvCell).join(",");
   });
