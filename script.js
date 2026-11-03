@@ -54,6 +54,47 @@ export function myCost(e, me) {
   return e.paidBy === me ? e.totalCents - owedCents(e) : owedCents(e);
 }
 
+/**
+ * 把一筆消費拆成「我負擔」的各列。沒有細項時回傳一列。
+ * 共同金額的單數分由付款人吸收，且各列加總一定等於 myCost。
+ */
+export function shareRows(e, me) {
+  const lines = e.lines || [];
+  if (!lines.length) {
+    const c = myCost(e, me);
+    return c > 0 ? [{ detail: "", cents: c }] : [];
+  }
+  const items = lines.map((l) => ({
+    detail: l.name,
+    cents: l.cents,
+    who: l.owner === "shared" ? "shared" : l.owner === e.paidBy ? "payer" : "other",
+  }));
+  const sum = (who) => items.filter((i) => i.who === who).reduce((a, i) => a + i.cents, 0);
+  const restPayer = e.payerPersonalCents - sum("payer");
+  const restOther = e.otherPersonalCents - sum("other");
+  const restShared = sharedCents(e) - sum("shared");
+  if (restShared > 0) items.push({ detail: "其他", cents: restShared, who: "shared" });
+  if (restPayer > 0) items.push({ detail: "其他", cents: restPayer, who: "payer" });
+  if (restOther > 0) items.push({ detail: "其他", cents: restOther, who: "other" });
+
+  // 先給每個共同項目一半（無條件捨去），再把對方還沒分完的 1 分補到單數項目
+  const shared = items.filter((i) => i.who === "shared");
+  let left = Math.floor(shared.reduce((a, i) => a + i.cents, 0) / 2) - shared.reduce((a, i) => a + Math.floor(i.cents / 2), 0);
+  for (const i of shared) {
+    i.otherShare = Math.floor(i.cents / 2);
+    if (left > 0 && i.cents % 2) { i.otherShare += 1; left -= 1; }
+  }
+  const iPaid = e.paidBy === me;
+  return items
+    .map((i) => {
+      let cents;
+      if (i.who === "shared") cents = iPaid ? i.cents - i.otherShare : i.otherShare;
+      else cents = (i.who === "payer") === iPaid ? i.cents : 0;
+      return { detail: i.detail, cents };
+    })
+    .filter((i) => i.cents > 0);
+}
+
 /** net > 0：對方欠我；net < 0：我欠對方 */
 export function computeNet(entries, me) {
   let net = 0;
@@ -87,9 +128,9 @@ const slashDate = (date) => date.replaceAll("-", "/");
 export function spendRows(entries, me, from, to) {
   return entries
     .filter((e) => !e.deletedAt && e.kind === "expense")
-    .map((e) => ({ date: e.date, item: e.item, cents: myCost(e, me), order: ms(e.createdAt) }))
-    .filter((r) => r.cents > 0 && (!from || r.date >= from) && (!to || r.date <= to))
-    .sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order);
+    .flatMap((e) => shareRows(e, me).map((r, index) => ({ date: e.date, item: e.item, detail: r.detail, cents: r.cents, order: ms(e.createdAt), index })))
+    .filter((r) => (!from || r.date >= from) && (!to || r.date <= to))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order || a.index - b.index);
 }
 
 /** 複製到 Excel 的 Tab 分隔文字。以公式字元開頭的項目加上空白，Excel 會當成文字。 */
@@ -98,7 +139,7 @@ export function toTsv(rows) {
     const one = String(s).replace(/[\t\r\n]+/g, " ");
     return /^[=+\-@]/.test(one) ? ` ${one}` : one;
   };
-  return ["日期\t項目\t金額", ...rows.map((r) => `${r.date}\t${clean(r.item)}\t${centsPlain(r.cents)}`)].join("\r\n");
+  return ["日期\t項目\t細項\t金額", ...rows.map((r) => `${r.date}\t${clean(r.item)}\t${clean(r.detail)}\t${centsPlain(r.cents)}`)].join("\r\n");
 }
 
 /** CSV 欄位：處理引號，並阻止 Excel 執行公式 */
@@ -328,14 +369,21 @@ export function diffEntry(before, after, people) {
     const to = personal(after, personUid);
     if (from !== to) changes.push({ field: "personal", personUid, from, to });
   }
+  if (linesText(before) !== linesText(after)) {
+    changes.push({ field: "lines", from: before.lines || [], to: after.lines || [] });
+  }
   if (before.kind === "expense" && owedCents(before) !== owedCents(after)) {
     changes.push({ field: "owedCents", from: owedCents(before), to: owedCents(after) });
   }
   return changes;
 }
 
+function linesText(e) {
+  return JSON.stringify((e.lines || []).map((l) => [l.name, l.cents, l.owner]));
+}
+
 function sameContent(a, b) {
-  return ["paidBy", "totalCents", "payerPersonalCents", "otherPersonalCents", "item", "date"].every((k) => a[k] === b[k]);
+  return linesText(a) === linesText(b) && ["paidBy", "totalCents", "payerPersonalCents", "otherPersonalCents", "item", "date"].every((k) => a[k] === b[k]);
 }
 
 const entryRef = (id) => fb.doc(db, "entries", id);
@@ -536,18 +584,35 @@ function renderExpenseForm(entry) {
   }
 
   const total = moneyInput("f-total", entry ? centsPlain(entry.totalCents) : "");
-  const mineInput = moneyInput("f-mine", mode === "mixed" && myInit ? centsPlain(myInit) : "");
-  const theirsInput = moneyInput("f-theirs", mode === "mixed" && otherInit ? centsPlain(otherInit) : "");
   const item = h("input", { id: "f-item", type: "text", maxLength: 100, autocomplete: "off", list: "item-suggestions", value: entry?.item ?? "" });
   const date = h("input", { id: "f-date", type: "date", max: localDate(), value: entry?.date ?? localDate() });
   const suggestions = h("datalist", { id: "item-suggestions" },
     [...new Set(activeEntries().filter((e) => e.kind === "expense").map((e) => e.item))].slice(0, 50).map((v) => h("option", { value: v })));
 
-  const mixedBox = h("div", {},
-    field("你的個人用品", mineInput),
-    field(`${otherName()}的個人用品`, theirsInput),
-  );
-  mixedBox.style.marginTop = "16px";
+  const lineNames = h("datalist", { id: "line-suggestions" },
+    [...new Set(activeEntries().flatMap((e) => (e.lines || []).map((l) => l.name)))].slice(0, 50).map((v) => h("option", { value: v })));
+  const linesBox = h("div", { class: "lines" });
+
+  function addLine(line = {}, focus = true) {
+    const ownerValue = line.owner === undefined || line.owner === "shared" ? "shared" : line.owner === me() ? "me" : "other";
+    const name = h("input", { type: "text", class: "line-name", maxLength: 50, autocomplete: "off", list: "line-suggestions", placeholder: "細項名稱", "aria-label": "細項名稱", value: line.name ?? "" });
+    const cents = moneyInput(null, line.cents ? centsPlain(line.cents) : "");
+    cents.classList.add("line-cents");
+    cents.setAttribute("aria-label", "細項金額");
+    const owner = h("select", { class: "line-owner", "aria-label": "細項屬於誰" },
+      h("option", { value: "shared" }, "共同"),
+      h("option", { value: "me" }, "你"),
+      h("option", { value: "other" }, otherName()),
+    );
+    owner.value = ownerValue;
+    const row = h("div", { class: "line" }, name, cents, owner,
+      h("button", { class: "line-remove", type: "button", "aria-label": "移除這個細項", onclick: () => { row.remove(); onInput(); } }, "×"));
+    linesBox.append(row);
+    if (focus) name.focus();
+  }
+
+  const addLineBtn = h("button", { class: "btn wide", type: "button", onclick: () => { addLine(); onInput(); } }, "＋ 加細項");
+  const linesSection = h("div", { class: "lines-section" }, linesBox, addLineBtn);
   const preview = h("div", { class: "preview", "aria-live": "polite" });
   const errorEl = h("p", { class: "error form-error", role: "alert", hidden: true });
   const saveBtn = h("button", { class: "btn primary wide large", type: "submit", "data-save": "" }, "儲存");
@@ -558,24 +623,37 @@ function renderExpenseForm(entry) {
   function read() {
     const totalCents = parseMoney(total.value);
     const m = modeValue();
+    const lines = [];
+    let lineProblem = "";
     let mine = 0;
     let theirs = 0;
+    for (const row of linesBox.querySelectorAll(".line")) {
+      const name = row.querySelector(".line-name").value.trim();
+      const rawCents = row.querySelector(".line-cents").value.trim();
+      if (!name && !rawCents) continue;
+      const cents = parseMoney(rawCents);
+      if (!cents) { lineProblem = `請輸入細項「${name || "未命名"}」的正確金額。`; continue; }
+      if (!name) { lineProblem = "請輸入細項名稱。"; continue; }
+      const picked = m === "mixed" ? row.querySelector(".line-owner").value : { shared: "shared", mine: "me", theirs: "other" }[m];
+      const owner = picked === "shared" ? "shared" : picked === "me" ? me() : other;
+      lines.push({ name, cents, owner });
+      if (picked === "me") mine += cents;
+      if (picked === "other") theirs += cents;
+    }
+    const linesSum = lines.reduce((a, l) => a + l.cents, 0);
     if (m === "mine") mine = totalCents ?? 0;
     if (m === "theirs") theirs = totalCents ?? 0;
-    if (m === "mixed") {
-      mine = parseMoney(mineInput.value, 0);
-      theirs = parseMoney(theirsInput.value, 0);
-    }
-    return { totalCents, mine, theirs };
+    return { totalCents, mine, theirs, lines, linesSum, lineProblem };
   }
 
   function refresh() {
-    mixedBox.hidden = modeValue() !== "mixed";
-    const { totalCents, mine, theirs } = read();
+    const isMixed = modeValue() === "mixed";
+    linesBox.classList.toggle("mixed", isMixed);
+    const { totalCents, mine, theirs, lines, linesSum, lineProblem } = read();
     let problem = "";
     if (total.value.trim() && (totalCents === null || totalCents === 0)) problem = "請輸入正確的總金額，最多兩位小數。";
-    else if (mine === null || theirs === null) problem = "個人用品金額格式不正確。";
-    else if (totalCents !== null && mine + theirs > totalCents) problem = "個人用品合計超過總金額。";
+    else if (lineProblem) problem = lineProblem;
+    else if (totalCents !== null && linesSum > totalCents) problem = `細項合計 ${formatMoney(linesSum)} 超過總金額。`;
 
     preview.hidden = false;
     if (problem) {
@@ -593,11 +671,14 @@ function renderExpenseForm(entry) {
       const shared = sharedCents(e);
       const debtor = paidBy === me() ? otherName() : "你";
       const payer = nameOf(paidBy);
+      const rest = totalCents - linesSum;
+      const restOwner = { shared: "共同", mixed: "共同", mine: "你", theirs: otherName() }[modeValue()];
       preview.replaceChildren(
-        h("span", { class: "muted small" }, `共同用品 ${formatMoney(shared)}（各付一半）`),
         h("strong", {}, owed ? `這筆${debtor}應付${payer} ${formatMoney(owed)}` : "不影響欠款"),
+        h("span", { class: "muted small preview-line" }, `共同用品 ${formatMoney(shared)}（各付一半）`),
       );
-      if (shared % 2) preview.append(h("span", { class: "muted small" }, "多出的 1 分由付款人吸收"));
+      if (lines.length && rest > 0) preview.append(h("span", { class: "muted small preview-line" }, `其他 ${formatMoney(rest)}（${restOwner}）`));
+      if (shared % 2) preview.append(h("span", { class: "muted small preview-line" }, "多出的 1 分由付款人吸收"));
     }
     saveBtn.dataset.invalid = problem ? "1" : "";
     syncSaveButtons();
@@ -608,7 +689,7 @@ function renderExpenseForm(entry) {
   async function submit(ev) {
     ev.preventDefault();
     errorEl.hidden = true;
-    const { totalCents, mine, theirs } = read();
+    const { totalCents, mine, theirs, lines } = read();
     const itemText = item.value.trim();
     let message = "";
     if (!totalCents) message = "請輸入總金額。";
@@ -625,8 +706,9 @@ function renderExpenseForm(entry) {
       otherPersonalCents: paidBy === me() ? theirs : mine,
       item: itemText,
       date: date.value,
+      lines,
     };
-    if (entry && sameContent(entry, content)) {
+    if (entry && (!S.formDirty || sameContent(entry, content))) {
       S.formDirty = false;
       location.replace(`#entry/${entry.id}`);
       return;
@@ -680,7 +762,6 @@ function renderExpenseForm(entry) {
     field("總金額", total),
     field("項目", item),
     field("日期", date),
-    suggestions,
     h("fieldset", { class: "choice" }, h("legend", {}, "這筆是？"),
       segments("mode", [
         { value: "shared", label: "全部共同" },
@@ -689,7 +770,9 @@ function renderExpenseForm(entry) {
         { value: "mixed", label: "混合" },
       ], mode, onInput, true),
     ),
-    mixedBox,
+    linesSection,
+    suggestions,
+    lineNames,
     preview,
     errorEl,
     h("div", { class: "form-actions" }, saveBtn),
@@ -699,6 +782,17 @@ function renderExpenseForm(entry) {
     h("div", { class: "page-head" }, h("h1", {}, entry ? "修改帳目" : "記一筆"), h("a", { class: "btn", href: entry ? `#entry/${entry.id}` : "#home" }, "取消")),
     form,
   );
+  // 帶入細項。舊帳沒有細項但有個人金額時，轉成細項列
+  const initialLines = entry?.lines?.length ? entry.lines : [];
+  initialLines.forEach((l) => addLine({ ...l, owner: l.owner === null ? other : l.owner }, false));
+  if (entry && !initialLines.length && mode === "mixed") {
+    if (myInit) addLine({ name: "個人用品", cents: myInit, owner: me() }, false);
+    if (otherInit) addLine({ name: "個人用品", cents: otherInit, owner: other ?? "__other" }, false);
+  }
+  // 選「混合」時，如果還沒有細項，自動開一列
+  page.querySelectorAll('input[name="mode"]').forEach((el) => el.addEventListener("change", () => {
+    if (modeValue() === "mixed" && !linesBox.querySelector(".line")) { addLine(); refresh(); }
+  }));
   refresh();
   if (!entry) total.focus();
 }
@@ -714,9 +808,19 @@ function changeText(c, kind) {
     const label = c.field === "totalCents" && kind === "repayment" ? "金額" : FIELD_LABEL[c.field];
     return `${label} ${formatMoney(c.from)} → ${formatMoney(c.to)}`;
   }
+  if (c.field === "lines") return `細項 ${linesSummary(c.from)} → ${linesSummary(c.to)}`;
   if (c.field === "item") return `${kind === "repayment" ? "備註" : "項目"} ${c.from || "（空白）"} → ${c.to || "（空白）"}`;
   if (c.field === "date") return `日期 ${slashDate(c.from)} → ${slashDate(c.to)}`;
   return "";
+}
+
+function ownerLabel(owner) {
+  return owner === "shared" ? "共同" : nameOf(owner);
+}
+
+function linesSummary(lines) {
+  if (!lines?.length) return "（沒有）";
+  return lines.map((l) => `${l.name} ${formatMoney(l.cents)}（${ownerLabel(l.owner)}）`).join("、");
 }
 
 const ACTION_LABEL = { create: "新增", update: "修改", delete: "刪除", restore: "復原" };
@@ -759,8 +863,13 @@ function renderEntry() {
     const myP = e.paidBy === me() ? e.payerPersonalCents : e.otherPersonalCents;
     const otherP = e.paidBy === me() ? e.otherPersonalCents : e.payerPersonalCents;
     rows.push(["付款人", nameOf(e.paidBy)], ["總金額", formatMoney(e.totalCents)]);
-    if (myP) rows.push(["你的個人用品", formatMoney(myP)]);
-    if (otherP) rows.push([`${otherName()}的個人用品`, formatMoney(otherP)]);
+    if (myP && !e.lines?.length) rows.push(["你的個人用品", formatMoney(myP)]);
+    if (otherP && !e.lines?.length) rows.push([`${otherName()}的個人用品`, formatMoney(otherP)]);
+    for (const l of e.lines || []) rows.push([l.name, `${formatMoney(l.cents)}（${ownerLabel(l.owner)}）`]);
+    if (e.lines?.length) {
+      const rest = e.totalCents - e.lines.reduce((a, l) => a + l.cents, 0);
+      if (rest > 0) rows.push(["其他", formatMoney(rest)]);
+    }
     rows.push(["共同用品", formatMoney(sharedCents(e))], ["結果", entryEffect(e).text], ["你的花費", formatMoney(myCost(e, me()))]);
   }
   if (e.deletedAt) rows.push(["狀態", `${nameOf(e.deletedBy)}於 ${timeText(e.deletedAt)} 刪除`]);
@@ -1000,9 +1109,9 @@ function renderSpend() {
 
   const table = rows.length
     ? h("div", { class: "table-wrap" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}, "日期"), h("th", {}, "項目"), h("th", { class: "num" }, "金額"))),
+      h("thead", {}, h("tr", {}, h("th", {}, "日期"), h("th", {}, "項目"), h("th", {}, "細項"), h("th", { class: "num" }, "金額"))),
       h("tbody", {}, rows.map((r) => h("tr", {},
-        h("td", { class: "date" }, r.date), h("td", { class: "item" }, r.item), h("td", { class: "num" }, centsPlain(r.cents)),
+        h("td", { class: "date" }, r.date), h("td", { class: "item" }, r.item), h("td", { class: "item" }, r.detail), h("td", { class: "num" }, centsPlain(r.cents)),
       ))),
     ))
     : h("div", { class: "table-wrap" }, h("p", { class: "muted empty" }, "這段期間沒有花費"));
@@ -1031,13 +1140,13 @@ function renderSpend() {
 // ---------- 設定 ----------
 
 function exportCsv() {
-  const header = ["日期", "類型", "項目", "付款人", "總金額", "付款人個人", "對方個人", "共同金額", "對方應付", "狀態", "建立者", "建立時間", "最後修改者", "最後修改時間"];
+  const header = ["日期", "類型", "項目", "付款人", "細項", "總金額", "付款人個人", "對方個人", "共同金額", "對方應付", "狀態", "建立者", "建立時間", "最後修改者", "最後修改時間"];
   const nick = (uid) => (uid ? memberName(uid) : "");
   const iso = (ts) => (ts?.toDate ? `${localDate(ts.toDate())} ${ts.toDate().toTimeString().slice(0, 8)}` : "");
   const lines = [...S.entries].sort((a, b) => a.date.localeCompare(b.date) || ms(a.createdAt) - ms(b.createdAt)).map((e) => {
     const expense = e.kind === "expense";
     return [
-      e.date, expense ? "消費" : "還款", e.item, nick(e.paidBy), centsPlain(e.totalCents),
+      e.date, expense ? "消費" : "還款", e.item, nick(e.paidBy), (e.lines || []).map((l) => `${l.name} ${centsPlain(l.cents)}（${l.owner === "shared" ? "共同" : nick(l.owner) || "對方"}）`).join("；"), centsPlain(e.totalCents),
       expense ? centsPlain(e.payerPersonalCents) : "", expense ? centsPlain(e.otherPersonalCents) : "",
       expense ? centsPlain(sharedCents(e)) : "", expense ? centsPlain(owedCents(e)) : "",
       e.deletedAt ? "已刪除" : "有效", nick(e.createdBy), iso(e.createdAt), nick(e.updatedBy), iso(e.updatedAt),

@@ -18,7 +18,7 @@ service cloud.firestore {
     function validEntry(d) {
       return d.keys().hasOnly([
           'kind', 'paidBy', 'totalCents', 'payerPersonalCents',
-          'otherPersonalCents', 'item', 'date',
+          'otherPersonalCents', 'item', 'date', 'lines',
           'createdBy', 'createdAt', 'updatedBy', 'updatedAt',
           'deletedBy', 'deletedAt'
         ])
@@ -39,6 +39,8 @@ service cloud.firestore {
             || (d.payerPersonalCents == 0 && d.otherPersonalCents == 0))
         && d.item is string && d.item.size() <= 100
         && (d.kind == 'repayment' || d.item.size() > 0)
+        && (!('lines' in d) || (d.lines is list && d.lines.size() <= 50))
+        && (d.kind == 'expense' || !('lines' in d) || d.lines.size() == 0)
         && d.date is string
         && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && d.updatedBy == request.auth.uid
