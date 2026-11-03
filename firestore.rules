@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAllowed() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'person-a@example.com',
+          'person-b@example.com'
+        ];
+    }
+
+    function isMember(uid) {
+      return exists(/databases/$(database)/documents/members/$(uid));
+    }
+
+    function validEntry(d) {
+      return d.keys().hasOnly([
+          'kind', 'paidBy', 'totalCents', 'payerPersonalCents',
+          'otherPersonalCents', 'item', 'date',
+          'createdBy', 'createdAt', 'updatedBy', 'updatedAt',
+          'deletedBy', 'deletedAt'
+        ])
+        && d.keys().hasAll([
+          'kind', 'paidBy', 'totalCents', 'payerPersonalCents',
+          'otherPersonalCents', 'item', 'date',
+          'createdBy', 'createdAt', 'updatedBy', 'updatedAt',
+          'deletedBy', 'deletedAt'
+        ])
+        && d.kind in ['expense', 'repayment']
+        && d.paidBy is string && isMember(d.paidBy)
+        && d.totalCents is int
+        && d.totalCents > 0 && d.totalCents <= 99999999
+        && d.payerPersonalCents is int && d.payerPersonalCents >= 0
+        && d.otherPersonalCents is int && d.otherPersonalCents >= 0
+        && d.payerPersonalCents + d.otherPersonalCents <= d.totalCents
+        && (d.kind == 'expense'
+            || (d.payerPersonalCents == 0 && d.otherPersonalCents == 0))
+        && d.item is string && d.item.size() <= 100
+        && (d.kind == 'repayment' || d.item.size() > 0)
+        && d.date is string
+        && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.updatedBy == request.auth.uid
+        && d.updatedAt == request.time;
+    }
+
+    function onlyDeleteFieldsChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['deletedBy', 'deletedAt', 'updatedBy', 'updatedAt']);
+    }
+
+    function validDeleteState() {
+      let after = request.resource.data;
+      let before = resource.data;
+      return
+        // 一般修改：只能改未刪除的帳目
+        (before.deletedAt == null
+          && after.deletedBy == null && after.deletedAt == null)
+        // 刪除
+        || (before.deletedAt == null
+          && after.deletedBy == request.auth.uid
+          && after.deletedAt == request.time
+          && onlyDeleteFieldsChanged())
+        // 復原
+        || (before.deletedAt != null
+          && after.deletedBy == null && after.deletedAt == null
+          && onlyDeleteFieldsChanged());
+    }
+
+    match /members/{uid} {
+      allow read: if isAllowed();
+      allow create, update: if isAllowed()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 20;
+      allow delete: if false;
+    }
+
+    match /entries/{entryId} {
+      allow read: if isAllowed();
+
+      allow create: if isAllowed()
+        && validEntry(request.resource.data)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.deletedBy == null
+        && request.resource.data.deletedAt == null;
+
+      allow update: if isAllowed()
+        && validEntry(request.resource.data)
+        && request.resource.data.kind == resource.data.kind
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validDeleteState();
+
+      // 永久刪除一律禁止，刪除以 deletedAt 標記
+      allow delete: if false;
+
+      match /history/{historyId} {
+        allow read: if isAllowed();
+        allow create: if isAllowed()
+          && request.resource.data.keys().hasOnly(['action', 'by', 'at', 'changes'])
+          && request.resource.data.keys().hasAll(['action', 'by', 'at', 'changes'])
+          && request.resource.data.action in ['create', 'update', 'delete', 'restore']
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.at == request.time
+          && request.resource.data.changes is list
+          && request.resource.data.changes.size() <= 10;
+        // 紀錄只能新增，不能更改或刪除
+        allow update, delete: if false;
+      }
+    }
+  }
+}

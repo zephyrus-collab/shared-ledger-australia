@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.googleusercontent.com; connect-src 'self' https://*.googleapis.com https://apis.google.com; frame-src https://*.firebaseapp.com https://accounts.google.com https://apis.google.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="theme-color" content="#6b4226">
+<title>共同帳本</title>
+<link rel="icon" href="apple-touch-icon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="gated">
+<div id="shell">
+  <nav id="nav" aria-label="主要導覽">
+    <span class="brand">共同帳本</span>
+    <a href="#home" data-nav="home">首頁</a>
+    <a href="#repay" data-nav="repay">還款</a>
+    <a href="#history" data-nav="history">歷史</a>
+    <a href="#spend" data-nav="spend">我的花費</a>
+    <a href="#settings" data-nav="settings">設定</a>
+  </nav>
+  <main>
+    <div id="banner" role="status" hidden></div>
+    <section class="page active" id="page-gate"><p class="muted">載入中…</p></section>
+    <section class="page" id="page-home"></section>
+    <section class="page" id="page-form"></section>
+    <section class="page" id="page-entry"></section>
+    <section class="page" id="page-repay"></section>
+    <section class="page" id="page-history"></section>
+    <section class="page" id="page-spend"></section>
+    <section class="page" id="page-settings"></section>
+  </main>
+</div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="dialog"></dialog>
+<script type="module" src="script.js"></script>
+</body>
+</html>
