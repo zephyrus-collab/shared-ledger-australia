@@ -584,7 +584,7 @@ function renderExpenseForm(entry) {
   }
 
   const total = moneyInput("f-total", entry ? centsPlain(entry.totalCents) : "");
-  const item = h("input", { id: "f-item", type: "text", maxLength: 100, autocomplete: "off", list: "item-suggestions", value: entry?.item ?? "" });
+  const item = h("input", { id: "f-item", type: "text", lang: "zh-Hant", maxLength: 100, autocomplete: "off", list: "item-suggestions", placeholder: "例如：超市採買", value: entry?.item ?? "" });
   const date = h("input", { id: "f-date", type: "date", max: localDate(), value: entry?.date ?? localDate() });
   const suggestions = h("datalist", { id: "item-suggestions" },
     [...new Set(activeEntries().filter((e) => e.kind === "expense").map((e) => e.item))].slice(0, 50).map((v) => h("option", { value: v })));
@@ -595,7 +595,7 @@ function renderExpenseForm(entry) {
 
   function addLine(line = {}, focus = true) {
     const ownerValue = line.owner === undefined || line.owner === "shared" ? "shared" : line.owner === me() ? "me" : "other";
-    const name = h("input", { type: "text", class: "line-name", maxLength: 50, autocomplete: "off", list: "line-suggestions", placeholder: "細項名稱", "aria-label": "細項名稱", value: line.name ?? "" });
+    const name = h("input", { type: "text", class: "line-name", lang: "zh-Hant", maxLength: 50, autocomplete: "off", list: "line-suggestions", placeholder: "例如：牛奶", "aria-label": "細項名稱", value: line.name ?? "" });
     const cents = moneyInput(null, line.cents ? centsPlain(line.cents) : "");
     cents.classList.add("line-cents");
     cents.setAttribute("aria-label", "細項金額");
