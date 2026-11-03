@@ -1,12 +1,12 @@
 // ===== 設定區（使用者填入 Firebase Console 提供的內容）=====
 // firebaseConfig 可以公開。請不要把真實 Email 寫進這個檔案，Email 只放在 Firebase Console 的安全規則。
 const firebaseConfig = {
-  apiKey: "在此填入",
-  authDomain: "在此填入",
-  projectId: "在此填入",
-  storageBucket: "在此填入",
-  messagingSenderId: "在此填入",
-  appId: "在此填入",
+  apiKey: "AIzaSyDE6qlIvVEtcpwuKHzbO4iX2UEuiMGk7x4",
+  authDomain: "shared-ledger-australia.firebaseapp.com",
+  projectId: "shared-ledger-australia",
+  storageBucket: "shared-ledger-australia.firebasestorage.app",
+  messagingSenderId: "795858544103",
+  appId: "1:795858544103:web:42a3cf34ed5ef342c18942",
 };
 const FIREBASE_VERSION = "13.2.0";
 const SAVE_TIMEOUT_MS = 15000;
